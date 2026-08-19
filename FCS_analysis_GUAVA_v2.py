@@ -3,21 +3,26 @@
 Created on Thu Sep 19 11:17:35 2024
 
 @author: Eliza
+
+Rewritten to use flow-cytometry-style density contour plots for gating figures.
 """
 
 import glob
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from flowio import FlowData
 from matplotlib.patches import Ellipse
-import re
 
-plotting_figs = "no"  # set to "yes" to plot figs
-SHOW_FIGS = False
+PLOTTING_FIGS = True # set to True to save gating figures
+SHOW_FIGS = True
 
+# -----------------------------
+# Global gating parameters
+# -----------------------------
 # Define global ellipse parameters
 CELL_ELLIPSE_PARAMS = {
     'center': (3.7, 3.3),
@@ -35,10 +40,22 @@ SINGLETS_ELLIPSE_PARAMS = {
 
 # Define histogram gates
 # 10**2.4 ≈ 251
-# 10**1.6 = 1
+# 10**1.6 ≈ 40
 grn_threshold = 2.4
 red_threshold = 1.6
 
+# Contour plotting controls
+CONTOUR_BINS = 160
+CONTOUR_LEVELS = 12
+MIN_POINTS_FOR_CONTOUR = 200
+SCATTER_FALLBACK_ALPHA = 0.25
+SCATTER_FALLBACK_SIZE = 4
+SAVE_DPI = 300
+
+
+# -----------------------------
+# Utility functions
+# -----------------------------
 def safe_filename(name):
     # Remove leading FCS3Exported_
     name = re.sub(r'^FCS3Exported_', '', name)
@@ -62,6 +79,7 @@ def safe_filename(name):
     name = re.sub(r'[<>:\"/\\|?*]', '_', name)
     name = re.sub(r'\s+', '_', name.strip())
     return name[:40].rstrip('._')
+
 
 def load_fcs_data(file_path):
     fcs_data = FlowData(file_path, ignore_offset_error="True")
@@ -112,58 +130,134 @@ def preprocess_data(df, file_name=None):
     df['GRN-B-HLin (log)'] = np.log10(df['GRN-B-HLin'])
     df['RED-G-HLin (log)'] = np.log10(df['RED-G-HLin'])
 
+    finite_mask = np.isfinite(
+        df[['FSC-HLin (log)', 'SSC-HLin (log)', 'FSC-ALin (log)', 'GRN-B-HLin (log)', 'RED-G-HLin (log)']]
+    ).all(axis=1)
+    nonfinite_dropped = int((~finite_mask).sum())
+    if nonfinite_dropped > 0:
+        df = df.loc[finite_mask].copy()
+
     summary = {
         'total_events_loaded': total_events_loaded,
-        'events_dropped_preprocess': dropped_events,
+        'events_dropped_preprocess': dropped_events + nonfinite_dropped,
         'events_remaining_after_preprocess': len(df),
-        'drop_reason': 'Non-positive values in one or more log-transformed channels'
+        'drop_reason': 'Non-positive or non-finite values in one or more log-transformed channels'
     }
 
     return df, summary
 
 
-def plot_fsc_ssc_with_gate(df, file_name):
-    params = CELL_ELLIPSE_PARAMS
-    plt.figure(figsize=(8, 6))
-    plt.scatter(df['FSC-HLin (log)'], df['SSC-HLin (log)'], alpha=0.5, s=10)
-    plt.xlabel('FSC-HLin (log scale)')
-    plt.ylabel('SSC-HLin (log scale)')
-    plt.title(f'FSC-HLin vs SSC-HLin All Events ({file_name})')
+def in_rotated_ellipse(x, y, center, width, height, angle):
+    x_translated = x - center[0]
+    y_translated = y - center[1]
+    angle_rad = np.radians(-angle)
+    rotation_matrix = np.array([
+        [np.cos(angle_rad), -np.sin(angle_rad)],
+        [np.sin(angle_rad),  np.cos(angle_rad)]
+    ])
+    rotated_points = rotation_matrix @ np.vstack((x_translated, y_translated))
+    x_rot, y_rot = rotated_points
+    ellipse_eq = (x_rot ** 2 / (width / 2) ** 2) + (y_rot ** 2 / (height / 2) ** 2) <= 1
+    return ellipse_eq
 
-    ellipse = Ellipse(
-        xy=params['center'],
-        width=params['width'],
-        height=params['height'],
-        angle=params['angle'],
-        edgecolor='r',
-        facecolor='none',
-        linestyle='--',
-        linewidth=2
-    )
-    plt.gca().add_patch(ellipse)
-    plt.savefig(f'{file_name}_fsc_ssc.png')
+
+# -----------------------------
+# Plotting helpers
+# -----------------------------
+def compute_density_grid(x, y, bins=CONTOUR_BINS):
+    hist, xedges, yedges = np.histogram2d(x, y, bins=bins)
+    xcenters = (xedges[:-1] + xedges[1:]) / 2
+    ycenters = (yedges[:-1] + yedges[1:]) / 2
+    X, Y = np.meshgrid(xcenters, ycenters)
+    Z = hist.T
+    return X, Y, Z
+
+
+def get_positive_contour_levels(Z, n_levels=CONTOUR_LEVELS):
+    positive = Z[Z > 0]
+    if positive.size == 0:
+        return None
+
+    zmin = positive.min()
+    zmax = positive.max()
+
+    if zmin == zmax:
+        return np.array([zmin, zmax + 1e-9])
+
+    return np.linspace(zmin, zmax, n_levels)
+
+
+def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
+                       ellipse_params=None, ellipse_edgecolor='r',
+                       cmap='viridis', filled=True):
+    plt.figure(figsize=(8, 6))
+
+    if len(x) >= MIN_POINTS_FOR_CONTOUR:
+        X, Y, Z = compute_density_grid(x, y, bins=CONTOUR_BINS)
+        positive_mask = Z > 0
+
+        if np.any(positive_mask):
+            masked_Z = np.ma.masked_where(~positive_mask, Z)
+            levels = get_positive_contour_levels(masked_Z.compressed(), n_levels=CONTOUR_LEVELS)
+
+            if levels is not None and len(levels) > 0:
+                if filled:
+                    contourf = plt.contourf(X, Y, masked_Z, levels=levels, cmap=cmap, extend='max')
+                    plt.contour(X, Y, masked_Z, levels=levels, colors='black', linewidths=0.35, alpha=0.35)
+                    cbar = plt.colorbar(contourf)
+                    cbar.set_label('Event density')
+                else:
+                    plt.contour(X, Y, masked_Z, levels=levels, cmap=cmap, linewidths=1.0)
+            else:
+                plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+        else:
+            plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+    else:
+        plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+
+    if ellipse_params is not None:
+        ellipse = Ellipse(
+            xy=ellipse_params['center'],
+            width=ellipse_params['width'],
+            height=ellipse_params['height'],
+            angle=ellipse_params['angle'],
+            edgecolor=ellipse_edgecolor,
+            facecolor='none',
+            linestyle='--',
+            linewidth=2
+        )
+        plt.gca().add_patch(ellipse)
+
+    plt.tight_layout()
+    plt.savefig(f'{file_name}_{output_suffix}.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
     plt.close()
 
 
+def plot_fsc_ssc_with_gate(df, file_name):
+    plot_flow_contours(
+        x=df['FSC-HLin (log)'].values,
+        y=df['SSC-HLin (log)'].values,
+        xlabel='FSC-HLin (log scale)',
+        ylabel='SSC-HLin (log scale)',
+        title=f'FSC-HLin vs SSC-HLin All Events ({file_name})',
+        file_name=file_name,
+        output_suffix='fsc_ssc',
+        ellipse_params=CELL_ELLIPSE_PARAMS,
+        ellipse_edgecolor='red',
+        cmap='viridis',
+        filled=True
+    )
+
+
 def apply_cell_gate(df):
     params = CELL_ELLIPSE_PARAMS
-
-    def in_ellipse(x, y, center, width, height, angle):
-        x_translated = x - center[0]
-        y_translated = y - center[1]
-        angle_rad = np.radians(-angle)
-        rotation_matrix = np.array([
-            [np.cos(angle_rad), -np.sin(angle_rad)],
-            [np.sin(angle_rad), np.cos(angle_rad)]
-        ])
-        rotated_points = rotation_matrix @ np.vstack((x_translated, y_translated))
-        x_rot, y_rot = rotated_points
-        ellipse_eq = (x_rot**2 / (width / 2)**2) + (y_rot**2 / (height / 2)**2) <= 1
-        return ellipse_eq
-
-    cell_mask = in_ellipse(
+    cell_mask = in_rotated_ellipse(
         df['FSC-HLin (log)'].values,
         df['SSC-HLin (log)'].values,
         params['center'],
@@ -171,52 +265,28 @@ def apply_cell_gate(df):
         params['height'],
         params['angle']
     )
-    return df[cell_mask]
+    return df[cell_mask].copy()
 
 
 def plot_fsca_vs_fsch_with_gate(cell_df, file_name):
-    params = SINGLETS_ELLIPSE_PARAMS
-
-    plt.figure(figsize=(8, 6))
-    plt.scatter(cell_df['FSC-ALin (log)'], cell_df['FSC-HLin (log)'], alpha=0.5, color='r', s=10)
-    plt.xlabel('FSC-ALin (log scale)')
-    plt.ylabel('FSC-HLin (log scale)')
-    plt.title(f'FSC-HLin vs FSC-ALin Gated on Cells ({file_name})')
-
-    ellipse = Ellipse(
-        xy=params['center'],
-        width=params['width'],
-        height=params['height'],
-        angle=params['angle'],
-        edgecolor='b',
-        facecolor='none',
-        linestyle='--',
-        linewidth=2
+    plot_flow_contours(
+        x=cell_df['FSC-ALin (log)'].values,
+        y=cell_df['FSC-HLin (log)'].values,
+        xlabel='FSC-ALin (log scale)',
+        ylabel='FSC-HLin (log scale)',
+        title=f'FSC-HLin vs FSC-ALin Gated on Cells ({file_name})',
+        file_name=file_name,
+        output_suffix='fsca_vs_fsch',
+        ellipse_params=SINGLETS_ELLIPSE_PARAMS,
+        ellipse_edgecolor='blue',
+        cmap='plasma',
+        filled=True
     )
-    plt.gca().add_patch(ellipse)
-    plt.savefig(f'{file_name}_fsca_vs_fsch.png')
-    if SHOW_FIGS:
-        plt.show()
-    plt.close()
 
 
 def apply_singlet_gate(df):
     params = SINGLETS_ELLIPSE_PARAMS
-
-    def in_ellipse_fsca_fsch(x, y, center, width, height, angle):
-        x_translated = x - center[0]
-        y_translated = y - center[1]
-        angle_rad = np.radians(-angle)
-        rotation_matrix = np.array([
-            [np.cos(angle_rad), -np.sin(angle_rad)],
-            [np.sin(angle_rad), np.cos(angle_rad)]
-        ])
-        rotated_points = rotation_matrix @ np.vstack((x_translated, y_translated))
-        x_rot, y_rot = rotated_points
-        ellipse_eq = (x_rot**2 / (width / 2)**2) + (y_rot**2 / (height / 2)**2) <= 1
-        return ellipse_eq
-
-    singlet_mask = in_ellipse_fsca_fsch(
+    singlet_mask = in_rotated_ellipse(
         df['FSC-ALin (log)'].values,
         df['FSC-HLin (log)'].values,
         params['center'],
@@ -224,7 +294,7 @@ def apply_singlet_gate(df):
         params['height'],
         params['angle']
     )
-    return df[singlet_mask]
+    return df[singlet_mask].copy()
 
 
 def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold, file_name):
@@ -237,7 +307,7 @@ def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold
         color='r',
         linestyle='--',
         linewidth=1.5,
-        label=f'Gating Threshold: {10**grn_threshold:.0f}'
+        label=f'Gating Threshold: {10 ** grn_threshold:.0f}'
     )
     plt.xlabel('GRN-B-HLin (log scale)')
     plt.ylabel('Frequency')
@@ -251,7 +321,7 @@ def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold
         color='r',
         linestyle='--',
         linewidth=1.5,
-        label=f'Gating Threshold: {10**red_threshold:.0f}'
+        label=f'Gating Threshold: {10 ** red_threshold:.0f}'
     )
     plt.xlabel('RED-G-HLin (log scale)')
     plt.ylabel('Frequency')
@@ -259,7 +329,7 @@ def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(f'{file_name}_histograms.png')
+    plt.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
     plt.close()
@@ -274,10 +344,10 @@ def calculate_percentage(gated_df, total_df):
     return percentage
 
 
-# Prepare a DataFrame to store results
+# -----------------------------
+# Main processing
+# -----------------------------
 results = []
-
-# Get list of all FCS files in the current directory
 file_list = glob.glob('*.fcs')
 
 for file_path in file_list:
@@ -304,7 +374,7 @@ for file_path in file_list:
         })
         continue
 
-    if plotting_figs == "yes":
+    if PLOTTING_FIGS:
         plot_fsc_ssc_with_gate(df, file_name)
 
     cell_df = apply_cell_gate(df)
@@ -326,7 +396,7 @@ for file_path in file_list:
         })
         continue
 
-    if plotting_figs == "yes":
+    if PLOTTING_FIGS:
         plot_fsca_vs_fsch_with_gate(cell_df, file_name)
 
     singlet_df = apply_singlet_gate(cell_df)
@@ -334,7 +404,7 @@ for file_path in file_list:
     gated_grn_df = singlet_df[singlet_df['GRN-B-HLin (log)'] > grn_threshold]
     gated_red_df = singlet_df[singlet_df['RED-G-HLin (log)'] > red_threshold]
 
-    if plotting_figs == "yes":
+    if PLOTTING_FIGS:
         plot_histograms(singlet_df, gated_grn_df, gated_red_df, grn_threshold, red_threshold, file_name)
 
     percentage_grn = calculate_percentage(gated_grn_df, singlet_df)
