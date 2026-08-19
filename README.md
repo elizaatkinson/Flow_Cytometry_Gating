@@ -1,12 +1,12 @@
 # Flow Cytometry Gating Scripts
 
-These three Python scripts process raw `.fcs` files from two different flow-cytometry platforms and calculate fluorescence-positive population percentages after sequential gating. Together, they provide instrument-specific workflows for:
+These Python workflows process raw `.fcs` files from two flow-cytometry platforms and calculate fluorescence-positive population percentages after sequential gating. The repository includes instrument-specific scripts for:
 
 - **Guava flow cytometer, gating version 1**
 - **Guava flow cytometer, gating version 2**
 - **Attune flow cytometer**
 
-All three scripts:
+All scripts:
 
 - read all `.fcs` files in the working directory
 - load event-level channel data using `flowio`
@@ -14,7 +14,7 @@ All three scripts:
 - apply fluorescence thresholds to define positive events
 - calculate percentages of positive events relative to the singlet population
 - export a summary workbook named `gating_results.xlsx`
-- optionally or automatically save QC plots showing gates and fluorescence histograms
+- save QC plots showing gates and fluorescence histograms
 
 ## Script overview
 
@@ -31,10 +31,12 @@ This script is designed for Guava `.fcs` files using the following channel names
 It:
 
 - removes events with non-positive values in required channels before log transformation
+- optionally removes non-finite values after log transformation
 - gates putative cells using an ellipse in $$\log_{10}(\mathrm{FSC\mbox{-}HLin})$$ vs $$\log_{10}(\mathrm{SSC\mbox{-}HLin})$$
 - gates singlets using an ellipse in $$\log_{10}(\mathrm{FSC\mbox{-}ALin})$$ vs $$\log_{10}(\mathrm{FSC\mbox{-}HLin})$$
 - defines GFP-positive and RFP-positive events using fluorescence thresholds on log-transformed Guava channels
 - records event counts and percentages, including skipped files and failure reasons
+- generates **flow-cytometry-style filled density contour plots** for the scatter-gating QC figures, with scatter fallback for sparse datasets
 
 #### Gate settings
 
@@ -74,7 +76,8 @@ Equivalent approximate linear thresholds:
 This version also:
 
 - renames exported Guava file names into shorter safe names when possible
-- logs skipped samples if required channels are missing, preprocessing removes all events, or fewer than 1000 cells remain after the cell gate
+- logs skipped samples if required channels are missing, preprocessing removes all events, or fewer than `1000` cells remain after the cell gate
+- uses high-resolution saved gating figures
 
 ---
 
@@ -120,7 +123,8 @@ Equivalent approximate linear thresholds:
 
 - larger cell gate ellipse
 - red threshold increased from $$1.0$$ to $$1.6$$ on the log scale
-- QC plotting is disabled by default with `plotting_figs = "no"`
+- QC plotting may be disabled by default depending on the script setting
+- if contour plotting has been applied to this version as well, scatter-gating plots are expected to be **filled density contour plots** rather than dot plots
 
 #### Outputs
 
@@ -152,11 +156,10 @@ It:
 - log-transforms the Attune scatter and fluorescence channels
 - gates cells using an ellipse in $$\log_{10}(\mathrm{FSC\mbox{-}H})$$ vs $$\log_{10}(\mathrm{SSC\mbox{-}H})$$
 - gates singlets using an ellipse in $$\log_{10}(\mathrm{FSC\mbox{-}A})$$ vs $$\log_{10}(\mathrm{FSC\mbox{-}H})$$
-- defines fluorescence-positive events by thresholding:
-  - `BL1-H`
-  - `YL2-H`
+- defines fluorescence-positive events by thresholding `BL1-H` and `YL2-H`
 - saves plots for every processed file
 - exports percentage-positive results to Excel
+- can use **filled density contour plots** for scatter-gating figures, depending on the current script version
 
 #### Gate settings
 
@@ -249,7 +252,11 @@ The gating order is:
 5. apply a **singlet gate** within the cell-gated population
 6. threshold fluorescence channels to define positive events
 7. calculate percentages relative to singlets
-8. export summary results and optional QC figures
+8. export summary results and QC figures
+
+## QC plot style
+
+Where updated versions are being used, the scatter-gating QC plots are rendered as **filled density contour plots**, which is consistent with common flow-cytometry presentation standards requesting **contour plots with outliers or pseudocolor plots**. Sparse datasets may fall back to light scatter plotting when contour estimation is not appropriate.
 
 ## Installation
 
@@ -282,11 +289,12 @@ Depending on the script, outputs may include:
 
 - The **two Guava scripts are not interchangeable**, because they use different cell-gate settings and different red fluorescence thresholds.
 - The **Attune script is instrument-specific** and expects Attune channel names, not Guava channel names.
-- Guava versions 1 and 2 explicitly remove non-positive values before log transformation; the Attune script applies log transforms more directly and may behave differently if zeros or negative values are present.
-- The Guava scripts skip files with too few gated cells after the cell gate if fewer than $$1000$$ events remain.
+- Guava versions 1 and 2 explicitly remove non-positive values before log transformation; some Attune versions may need extra preprocessing if zeros or negative values are present.
+- The Guava scripts skip files with too few gated cells after the cell gate if fewer than `1000` events remain.
 - The Guava scripts produce a more detailed processing summary than the Attune script.
 - Running multiple scripts in the same folder will overwrite `gating_results.xlsx` unless you rename outputs or separate workflows by directory.
 - QC plots are useful for confirming that ellipse positions and histogram thresholds are still appropriate for each experiment.
+- If a contour plot appears white with only a colorbar, ensure the current script version masks zero-density regions and links the colorbar to the filled contour object.
 
 ## Recommended workflow
 
