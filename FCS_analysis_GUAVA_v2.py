@@ -4,7 +4,6 @@ Created on Thu Sep 19 11:17:35 2024
 
 @author: Eliza
 
-Rewritten to use flow-cytometry-style density contour plots for gating figures.
 """
 
 import glob
@@ -17,7 +16,7 @@ import pandas as pd
 from flowio import FlowData
 from matplotlib.patches import Ellipse
 
-PLOTTING_FIGS = True # set to True to save gating figures
+PLOTTING_FIGS = True  # set to True to save gating figures
 SHOW_FIGS = True
 
 # -----------------------------
@@ -44,6 +43,16 @@ SINGLETS_ELLIPSE_PARAMS = {
 grn_threshold = 2.4
 red_threshold = 1.6
 
+# Standardized axis limits for scatter plots
+FSC_SSC_XLIM = (2.0, 5.5)
+FSC_SSC_YLIM = (2.0, 4.8)
+FSCA_FSCH_XLIM = (2.5, 5.0)
+FSCA_FSCH_YLIM = (2.5, 5.0)
+
+# Standardized axis limits for histograms
+GRN_HIST_XLIM = (0.0, 4.0)
+RED_HIST_XLIM = (0.0, 3.0)
+
 # Contour plotting controls
 CONTOUR_BINS = 160
 CONTOUR_LEVELS = 12
@@ -51,6 +60,16 @@ MIN_POINTS_FOR_CONTOUR = 200
 SCATTER_FALLBACK_ALPHA = 0.25
 SCATTER_FALLBACK_SIZE = 4
 SAVE_DPI = 300
+HIST_BINS = 50
+
+# Label box styling
+LABEL_BOX_KWARGS = {
+    'boxstyle': 'round,pad=0.3',
+    'facecolor': 'white',
+    'edgecolor': 'black',
+    'linewidth': 0.8,
+    'alpha': 0.9
+}
 
 
 # -----------------------------
@@ -187,10 +206,23 @@ def get_positive_contour_levels(Z, n_levels=CONTOUR_LEVELS):
     return np.linspace(zmin, zmax, n_levels)
 
 
+def add_boxed_label(ax, text, x=0.02, y=0.98, fontsize=10):
+    ax.text(
+        x, y, text,
+        transform=ax.transAxes,
+        ha='left',
+        va='top',
+        fontsize=fontsize,
+        bbox=LABEL_BOX_KWARGS,
+        zorder=10
+    )
+
+
 def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
                        ellipse_params=None, ellipse_edgecolor='r',
-                       cmap='viridis', filled=True):
-    plt.figure(figsize=(8, 6))
+                       cmap='viridis', filled=True, gate_fraction=None,
+                       gate_label='In gate', xlim=None, ylim=None):
+    fig, ax = plt.subplots(figsize=(8, 6))
 
     if len(x) >= MIN_POINTS_FOR_CONTOUR:
         X, Y, Z = compute_density_grid(x, y, bins=CONTOUR_BINS)
@@ -202,22 +234,27 @@ def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
 
             if levels is not None and len(levels) > 0:
                 if filled:
-                    contourf = plt.contourf(X, Y, masked_Z, levels=levels, cmap=cmap, extend='max')
-                    plt.contour(X, Y, masked_Z, levels=levels, colors='black', linewidths=0.35, alpha=0.35)
-                    cbar = plt.colorbar(contourf)
+                    contourf = ax.contourf(X, Y, masked_Z, levels=levels, cmap=cmap, extend='max')
+                    ax.contour(X, Y, masked_Z, levels=levels, colors='black', linewidths=0.35, alpha=0.35)
+                    cbar = fig.colorbar(contourf, ax=ax)
                     cbar.set_label('Event density')
                 else:
-                    plt.contour(X, Y, masked_Z, levels=levels, cmap=cmap, linewidths=1.0)
+                    ax.contour(X, Y, masked_Z, levels=levels, cmap=cmap, linewidths=1.0)
             else:
-                plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+                ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
         else:
-            plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+            ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
     else:
-        plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+        ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
 
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
 
     if ellipse_params is not None:
         ellipse = Ellipse(
@@ -230,16 +267,19 @@ def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
             linestyle='--',
             linewidth=2
         )
-        plt.gca().add_patch(ellipse)
+        ax.add_patch(ellipse)
 
-    plt.tight_layout()
-    plt.savefig(f'{file_name}_{output_suffix}.png', dpi=SAVE_DPI)
+    if gate_fraction is not None and not np.isnan(gate_fraction):
+        add_boxed_label(ax, f'{gate_label}: {gate_fraction:.1f}%')
+
+    fig.tight_layout()
+    fig.savefig(f'{file_name}_{output_suffix}.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
-    plt.close()
+    plt.close(fig)
 
 
-def plot_fsc_ssc_with_gate(df, file_name):
+def plot_fsc_ssc_with_gate(df, file_name, cell_fraction):
     plot_flow_contours(
         x=df['FSC-HLin (log)'].values,
         y=df['SSC-HLin (log)'].values,
@@ -251,7 +291,11 @@ def plot_fsc_ssc_with_gate(df, file_name):
         ellipse_params=CELL_ELLIPSE_PARAMS,
         ellipse_edgecolor='red',
         cmap='viridis',
-        filled=True
+        filled=True,
+        gate_fraction=cell_fraction,
+        gate_label='In cell gate',
+        xlim=FSC_SSC_XLIM,
+        ylim=FSC_SSC_YLIM
     )
 
 
@@ -268,7 +312,7 @@ def apply_cell_gate(df):
     return df[cell_mask].copy()
 
 
-def plot_fsca_vs_fsch_with_gate(cell_df, file_name):
+def plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction):
     plot_flow_contours(
         x=cell_df['FSC-ALin (log)'].values,
         y=cell_df['FSC-HLin (log)'].values,
@@ -280,7 +324,11 @@ def plot_fsca_vs_fsch_with_gate(cell_df, file_name):
         ellipse_params=SINGLETS_ELLIPSE_PARAMS,
         ellipse_edgecolor='blue',
         cmap='plasma',
-        filled=True
+        filled=True,
+        gate_fraction=singlet_fraction,
+        gate_label='In singlet gate',
+        xlim=FSCA_FSCH_XLIM,
+        ylim=FSCA_FSCH_YLIM
     )
 
 
@@ -297,42 +345,86 @@ def apply_singlet_gate(df):
     return df[singlet_mask].copy()
 
 
-def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold, file_name):
-    plt.figure(figsize=(14, 7))
+def compute_histogram_ymax(values, xlim, bins=HIST_BINS):
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 1
 
-    plt.subplot(1, 2, 1)
-    plt.hist(df['GRN-B-HLin (log)'].dropna(), bins=50, alpha=0.7, color='g', edgecolor='black')
-    plt.axvline(
-        grn_threshold,
-        color='r',
-        linestyle='--',
-        linewidth=1.5,
-        label=f'Gating Threshold: {10 ** grn_threshold:.0f}'
-    )
-    plt.xlabel('GRN-B-HLin (log scale)')
-    plt.ylabel('Frequency')
-    plt.title(f'Histogram of GRN-B-HLin (log) Gated on Singlets ({file_name})')
-    plt.legend()
+    counts, _ = np.histogram(finite_values, bins=bins, range=xlim)
+    ymax = counts.max() if counts.size > 0 else 0
+    return max(1, int(np.ceil(ymax * 1.1)))
 
-    plt.subplot(1, 2, 2)
-    plt.hist(df['RED-G-HLin (log)'].dropna(), bins=50, alpha=0.7, color='y', edgecolor='black')
-    plt.axvline(
-        red_threshold,
-        color='r',
-        linestyle='--',
-        linewidth=1.5,
-        label=f'Gating Threshold: {10 ** red_threshold:.0f}'
-    )
-    plt.xlabel('RED-G-HLin (log scale)')
-    plt.ylabel('Frequency')
-    plt.title(f'Histogram of RED-G-HLin (log) Gated on Singlets ({file_name})')
-    plt.legend()
 
-    plt.tight_layout()
-    plt.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
+def compute_global_histogram_limits(file_list):
+    grn_ymax = 1
+    red_ymax = 1
+
+    for file_path in file_list:
+        file_name = safe_filename(os.path.splitext(os.path.basename(file_path))[0])
+        raw_df = load_fcs_data(file_path)
+        df, _ = preprocess_data(raw_df, file_name=file_name)
+
+        if df.empty:
+            continue
+
+        cell_df = apply_cell_gate(df)
+        if cell_df.empty:
+            continue
+
+        singlet_df = apply_singlet_gate(cell_df)
+        if singlet_df.empty:
+            continue
+
+        current_grn_ymax = compute_histogram_ymax(
+            singlet_df['GRN-B-HLin (log)'].values,
+            GRN_HIST_XLIM,
+            bins=HIST_BINS
+        )
+        current_red_ymax = compute_histogram_ymax(
+            singlet_df['RED-G-HLin (log)'].values,
+            RED_HIST_XLIM,
+            bins=HIST_BINS
+        )
+
+        grn_ymax = max(grn_ymax, current_grn_ymax)
+        red_ymax = max(red_ymax, current_red_ymax)
+
+    return grn_ymax, red_ymax
+
+
+def plot_histograms(df, gated_grn_df, gated_red_df, grn_threshold, red_threshold, file_name,
+                    percentage_grn, percentage_red, grn_hist_ylim, red_hist_ylim):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+
+    ax1 = axes[0]
+    ax1.hist(df['GRN-B-HLin (log)'].dropna(), bins=HIST_BINS, range=GRN_HIST_XLIM,
+             alpha=0.7, color='g', edgecolor='black')
+    ax1.axvline(grn_threshold, color='r', linestyle='--', linewidth=1.5)
+    ax1.set_xlabel('GRN-B-HLin (log scale)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title(f'Histogram of GRN-B-HLin (log) Gated on Singlets ({file_name})')
+    ax1.set_xlim(GRN_HIST_XLIM)
+    ax1.set_ylim(0, grn_hist_ylim)
+    add_boxed_label(ax1, f'In gate: {percentage_grn:.1f}%', x=0.02, y=0.98)
+    add_boxed_label(ax1, f'Threshold: {10 ** grn_threshold:.0f}', x=0.02, y=0.93)
+
+    ax2 = axes[1]
+    ax2.hist(df['RED-G-HLin (log)'].dropna(), bins=HIST_BINS, range=RED_HIST_XLIM,
+             alpha=0.7, color='y', edgecolor='black')
+    ax2.axvline(red_threshold, color='r', linestyle='--', linewidth=1.5)
+    ax2.set_xlabel('RED-G-HLin (log scale)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title(f'Histogram of RED-G-HLin (log) Gated on Singlets ({file_name})')
+    ax2.set_xlim(RED_HIST_XLIM)
+    ax2.set_ylim(0, red_hist_ylim)
+    add_boxed_label(ax2, f'In gate: {percentage_red:.1f}%', x=0.02, y=0.98)
+    add_boxed_label(ax2, f'Threshold: {10 ** red_threshold:.0f}', x=0.02, y=0.93)
+
+    fig.tight_layout()
+    fig.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
-    plt.close()
+    plt.close(fig)
 
 
 def calculate_percentage(gated_df, total_df):
@@ -349,6 +441,9 @@ def calculate_percentage(gated_df, total_df):
 # -----------------------------
 results = []
 file_list = glob.glob('*.fcs')
+
+# Compute global standardized histogram y-limits across all files
+GRN_HIST_YMAX, RED_HIST_YMAX = compute_global_histogram_limits(file_list)
 
 for file_path in file_list:
     file_name = safe_filename(os.path.splitext(os.path.basename(file_path))[0])
@@ -374,10 +469,11 @@ for file_path in file_list:
         })
         continue
 
-    if PLOTTING_FIGS:
-        plot_fsc_ssc_with_gate(df, file_name)
-
     cell_df = apply_cell_gate(df)
+    cell_fraction = calculate_percentage(cell_df, df)
+
+    if PLOTTING_FIGS:
+        plot_fsc_ssc_with_gate(df, file_name, cell_fraction)
 
     if len(cell_df) < 1000:
         print(f"Skipping {file_name}: fewer than 1000 cells after gating.")
@@ -396,19 +492,31 @@ for file_path in file_list:
         })
         continue
 
-    if PLOTTING_FIGS:
-        plot_fsca_vs_fsch_with_gate(cell_df, file_name)
-
     singlet_df = apply_singlet_gate(cell_df)
+    singlet_fraction = calculate_percentage(singlet_df, cell_df)
+
+    if PLOTTING_FIGS:
+        plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction)
 
     gated_grn_df = singlet_df[singlet_df['GRN-B-HLin (log)'] > grn_threshold]
     gated_red_df = singlet_df[singlet_df['RED-G-HLin (log)'] > red_threshold]
 
-    if PLOTTING_FIGS:
-        plot_histograms(singlet_df, gated_grn_df, gated_red_df, grn_threshold, red_threshold, file_name)
-
     percentage_grn = calculate_percentage(gated_grn_df, singlet_df)
     percentage_red = calculate_percentage(gated_red_df, singlet_df)
+
+    if PLOTTING_FIGS:
+        plot_histograms(
+            singlet_df,
+            gated_grn_df,
+            gated_red_df,
+            grn_threshold,
+            red_threshold,
+            file_name,
+            percentage_grn,
+            percentage_red,
+            GRN_HIST_YMAX,
+            RED_HIST_YMAX
+        )
 
     results.append({
         'File Name': file_name,

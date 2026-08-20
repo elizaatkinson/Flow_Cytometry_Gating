@@ -4,7 +4,6 @@ Created on Thu Sep 19 11:17:35 2024
 
 @author: Eliza
 
-Updated to use colored flow-cytometry-style filled density contour plots for gating figures.
 """
 
 import glob
@@ -40,6 +39,16 @@ SINGLETS_ELLIPSE_PARAMS = {
 bl1_threshold = 4.0
 yl2_threshold = 4.0
 
+# Standardized axis limits for scatter plots
+FSC_SSC_XLIM = (3.2, 6.2)
+FSC_SSC_YLIM = (3.8, 5.6)
+FSCA_FSCH_XLIM = (3.5, 5.5)
+FSCA_FSCH_YLIM = (3.5, 5.5)
+
+# Standardized axis limits for histograms
+BL1_HIST_XLIM = (2.0, 6.2)
+YL2_HIST_XLIM = (2.0, 6.2)
+
 # Contour plotting controls
 CONTOUR_BINS = 160
 CONTOUR_LEVELS = 12
@@ -47,6 +56,16 @@ MIN_POINTS_FOR_CONTOUR = 200
 SCATTER_FALLBACK_ALPHA = 0.25
 SCATTER_FALLBACK_SIZE = 4
 SAVE_DPI = 300
+HIST_BINS = 50
+
+# Label box styling
+LABEL_BOX_KWARGS = {
+    'boxstyle': 'round,pad=0.3',
+    'facecolor': 'white',
+    'edgecolor': 'black',
+    'linewidth': 0.8,
+    'alpha': 0.9
+}
 
 
 # -----------------------------
@@ -67,6 +86,7 @@ def load_fcs_data(file_path):
 
     channel_names = [get_channel_name(meta_data, i) for i in range(1, n_channels + 1)]
     return pd.DataFrame(reshaped_data, columns=channel_names)
+
 
 
 def preprocess_data(df, file_name=None):
@@ -147,6 +167,7 @@ def compute_density_grid(x, y, bins=CONTOUR_BINS):
     return X, Y, Z
 
 
+
 def get_positive_contour_levels(Z, n_levels=CONTOUR_LEVELS):
     positive = Z[Z > 0]
     if positive.size == 0:
@@ -161,10 +182,25 @@ def get_positive_contour_levels(Z, n_levels=CONTOUR_LEVELS):
     return np.linspace(zmin, zmax, n_levels)
 
 
+
+def add_boxed_label(ax, text, x=0.02, y=0.98, fontsize=10):
+    ax.text(
+        x, y, text,
+        transform=ax.transAxes,
+        ha='left',
+        va='top',
+        fontsize=fontsize,
+        bbox=LABEL_BOX_KWARGS,
+        zorder=10
+    )
+
+
+
 def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
                        ellipse_params=None, ellipse_edgecolor='r',
-                       cmap='viridis', filled=True):
-    plt.figure(figsize=(8, 6))
+                       cmap='viridis', filled=True, gate_fraction=None,
+                       gate_label='In gate', xlim=None, ylim=None):
+    fig, ax = plt.subplots(figsize=(8, 6))
 
     if len(x) >= MIN_POINTS_FOR_CONTOUR:
         X, Y, Z = compute_density_grid(x, y, bins=CONTOUR_BINS)
@@ -176,22 +212,27 @@ def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
 
             if levels is not None and len(levels) > 0:
                 if filled:
-                    contourf = plt.contourf(X, Y, masked_Z, levels=levels, cmap=cmap, extend='max')
-                    plt.contour(X, Y, masked_Z, levels=levels, colors='black', linewidths=0.35, alpha=0.35)
-                    cbar = plt.colorbar(contourf)
+                    contourf = ax.contourf(X, Y, masked_Z, levels=levels, cmap=cmap, extend='max')
+                    ax.contour(X, Y, masked_Z, levels=levels, colors='black', linewidths=0.35, alpha=0.35)
+                    cbar = fig.colorbar(contourf, ax=ax)
                     cbar.set_label('Event density')
                 else:
-                    plt.contour(X, Y, masked_Z, levels=levels, cmap=cmap, linewidths=1.0)
+                    ax.contour(X, Y, masked_Z, levels=levels, cmap=cmap, linewidths=1.0)
             else:
-                plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+                ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
         else:
-            plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+            ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
     else:
-        plt.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
+        ax.scatter(x, y, alpha=SCATTER_FALLBACK_ALPHA, s=SCATTER_FALLBACK_SIZE, c='black', rasterized=True)
 
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
 
     if ellipse_params is not None:
         ellipse = Ellipse(
@@ -204,16 +245,20 @@ def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
             linestyle='--',
             linewidth=2
         )
-        plt.gca().add_patch(ellipse)
+        ax.add_patch(ellipse)
 
-    plt.tight_layout()
-    plt.savefig(f'{file_name}_{output_suffix}.png', dpi=SAVE_DPI)
+    if gate_fraction is not None and not np.isnan(gate_fraction):
+        add_boxed_label(ax, f'{gate_label}: {gate_fraction:.1f}%')
+
+    fig.tight_layout()
+    fig.savefig(f'{file_name}_{output_suffix}.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
-    plt.close()
+    plt.close(fig)
 
 
-def plot_fsc_ssc_with_gate(df, file_name):
+
+def plot_fsc_ssc_with_gate(df, file_name, cell_fraction):
     plot_flow_contours(
         x=df['FSC-H (log)'].values,
         y=df['SSC-H (log)'].values,
@@ -225,8 +270,13 @@ def plot_fsc_ssc_with_gate(df, file_name):
         ellipse_params=CELL_ELLIPSE_PARAMS,
         ellipse_edgecolor='red',
         cmap='viridis',
-        filled=True
+        filled=True,
+        gate_fraction=cell_fraction,
+        gate_label='In cell gate',
+        xlim=FSC_SSC_XLIM,
+        ylim=FSC_SSC_YLIM
     )
+
 
 
 def apply_cell_gate(df):
@@ -242,7 +292,8 @@ def apply_cell_gate(df):
     return df[cell_mask].copy()
 
 
-def plot_fsca_vs_fsch_with_gate(cell_df, file_name):
+
+def plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction):
     plot_flow_contours(
         x=cell_df['FSC-A (log)'].values,
         y=cell_df['FSC-H (log)'].values,
@@ -254,8 +305,13 @@ def plot_fsca_vs_fsch_with_gate(cell_df, file_name):
         ellipse_params=SINGLETS_ELLIPSE_PARAMS,
         ellipse_edgecolor='blue',
         cmap='plasma',
-        filled=True
+        filled=True,
+        gate_fraction=singlet_fraction,
+        gate_label='In singlet gate',
+        xlim=FSCA_FSCH_XLIM,
+        ylim=FSCA_FSCH_YLIM
     )
+
 
 
 def apply_singlet_gate(df):
@@ -271,42 +327,102 @@ def apply_singlet_gate(df):
     return df[singlet_mask].copy()
 
 
-def plot_histograms(df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold, file_name):
-    plt.figure(figsize=(14, 7))
 
-    plt.subplot(1, 2, 1)
-    plt.hist(df['BL1-H (log)'].dropna(), bins=50, alpha=0.7, color='g', edgecolor='black')
-    plt.axvline(
+def compute_histogram_ymax(values, xlim, bins=HIST_BINS):
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 1
+
+    counts, _ = np.histogram(finite_values, bins=bins, range=xlim)
+    ymax = counts.max() if counts.size > 0 else 0
+    return max(1, int(np.ceil(ymax * 1.1)))
+
+
+
+def compute_global_histogram_limits(file_list):
+    bl1_ymax = 1
+    yl2_ymax = 1
+
+    for file_path in file_list:
+        file_name = os.path.splitext(os.path.basename(file_path))[0]
+        raw_df = load_fcs_data(file_path)
+        df, _ = preprocess_data(raw_df, file_name=file_name)
+
+        if df.empty:
+            continue
+
+        cell_df = apply_cell_gate(df)
+        if cell_df.empty:
+            continue
+
+        singlet_df = apply_singlet_gate(cell_df)
+        if singlet_df.empty:
+            continue
+
+        current_bl1_ymax = compute_histogram_ymax(
+            singlet_df['BL1-H (log)'].values,
+            BL1_HIST_XLIM,
+            bins=HIST_BINS
+        )
+        current_yl2_ymax = compute_histogram_ymax(
+            singlet_df['YL2-H (log)'].values,
+            YL2_HIST_XLIM,
+            bins=HIST_BINS
+        )
+
+        bl1_ymax = max(bl1_ymax, current_bl1_ymax)
+        yl2_ymax = max(yl2_ymax, current_yl2_ymax)
+
+    return bl1_ymax, yl2_ymax
+
+
+
+def plot_histograms(df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold, file_name,
+                    percentage_bl1, percentage_yl2, bl1_hist_ylim, yl2_hist_ylim):
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+
+    ax1 = axes[0]
+    ax1.hist(df['BL1-H (log)'].dropna(), bins=HIST_BINS, range=BL1_HIST_XLIM,
+             alpha=0.7, color='g', edgecolor='black')
+    ax1.axvline(
         bl1_threshold,
         color='r',
         linestyle='--',
         linewidth=1.5,
-        label=f'Gating Threshold: {10 ** bl1_threshold:.0f}'
+        label=f'Threshold: {10 ** bl1_threshold:.0f}'
     )
-    plt.xlabel('BL1-H (log scale)')
-    plt.ylabel('Frequency')
-    plt.title(f'Histogram of BL1-H (log) Gated on Singlets ({file_name})')
-    plt.legend()
+    ax1.set_xlabel('BL1-H (log scale)')
+    ax1.set_ylabel('Frequency')
+    ax1.set_title(f'Histogram of BL1-H (log) Gated on Singlets ({file_name})')
+    ax1.set_xlim(BL1_HIST_XLIM)
+    ax1.set_ylim(0, bl1_hist_ylim)
+    add_boxed_label(ax1, f'In gate: {percentage_bl1:.1f}%', x=0.02, y=0.98)
+    add_boxed_label(ax1, f'Threshold: {10 ** bl1_threshold:.0f}', x=0.02, y=0.93)
 
-    plt.subplot(1, 2, 2)
-    plt.hist(df['YL2-H (log)'].dropna(), bins=50, alpha=0.7, color='y', edgecolor='black')
-    plt.axvline(
+    ax2 = axes[1]
+    ax2.hist(df['YL2-H (log)'].dropna(), bins=HIST_BINS, range=YL2_HIST_XLIM,
+             alpha=0.7, color='y', edgecolor='black')
+    ax2.axvline(
         yl2_threshold,
         color='r',
         linestyle='--',
         linewidth=1.5,
-        label=f'Gating Threshold: {10 ** yl2_threshold:.0f}'
+        label=f'Threshold: {10 ** yl2_threshold:.0f}'
     )
-    plt.xlabel('YL2-H (log scale)')
-    plt.ylabel('Frequency')
-    plt.title(f'Histogram of YL2-H (log) Gated on Singlets ({file_name})')
-    plt.legend()
+    ax2.set_xlabel('YL2-H (log scale)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title(f'Histogram of YL2-H (log) Gated on Singlets ({file_name})')
+    ax2.set_xlim(YL2_HIST_XLIM)
+    ax2.set_ylim(0, yl2_hist_ylim)
+    add_boxed_label(ax2, f'In gate: {percentage_yl2:.1f}%', x=0.02, y=0.98)
+    add_boxed_label(ax2, f'Threshold: {10 ** yl2_threshold:.0f}', x=0.02, y=0.93)
 
-    plt.tight_layout()
-    plt.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
+    fig.tight_layout()
+    fig.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
     if SHOW_FIGS:
         plt.show()
-    plt.close()
+    plt.close(fig)
+
 
 
 def calculate_percentage(gated_df, total_df):
@@ -323,6 +439,9 @@ def calculate_percentage(gated_df, total_df):
 # -----------------------------
 results = []
 file_list = glob.glob('*.fcs')
+
+# Compute global standardized histogram y-limits across all files
+BL1_HIST_YMAX, YL2_HIST_YMAX = compute_global_histogram_limits(file_list)
 
 for file_path in file_list:
     file_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -348,24 +467,37 @@ for file_path in file_list:
         })
         continue
 
-    if PLOTTING_FIGS:
-        plot_fsc_ssc_with_gate(df, file_name)
-
     cell_df = apply_cell_gate(df)
+    cell_fraction = calculate_percentage(cell_df, df)
 
     if PLOTTING_FIGS:
-        plot_fsca_vs_fsch_with_gate(cell_df, file_name)
+        plot_fsc_ssc_with_gate(df, file_name, cell_fraction)
 
     singlet_df = apply_singlet_gate(cell_df)
+    singlet_fraction = calculate_percentage(singlet_df, cell_df)
+
+    if PLOTTING_FIGS:
+        plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction)
 
     gated_bl1_df = singlet_df[singlet_df['BL1-H (log)'] > bl1_threshold]
     gated_yl2_df = singlet_df[singlet_df['YL2-H (log)'] > yl2_threshold]
 
-    if PLOTTING_FIGS:
-        plot_histograms(singlet_df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold, file_name)
-
     percentage_bl1 = calculate_percentage(gated_bl1_df, singlet_df)
     percentage_yl2 = calculate_percentage(gated_yl2_df, singlet_df)
+
+    if PLOTTING_FIGS:
+        plot_histograms(
+            singlet_df,
+            gated_bl1_df,
+            gated_yl2_df,
+            bl1_threshold,
+            yl2_threshold,
+            file_name,
+            percentage_bl1,
+            percentage_yl2,
+            BL1_HIST_YMAX,
+            YL2_HIST_YMAX
+        )
 
     results.append({
         'File Name': file_name,
