@@ -8,6 +8,7 @@ Created on Thu Sep 19 11:17:35 2024
 
 import glob
 import os
+import re
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -46,8 +47,8 @@ FSCA_FSCH_XLIM = (3.5, 5.5)
 FSCA_FSCH_YLIM = (3.5, 5.5)
 
 # Standardized axis limits for histograms
-BL1_HIST_XLIM = (2.0, 6.2)
-YL2_HIST_XLIM = (2.0, 6.2)
+BL1_HIST_XLIM = (1.0, 6.2)
+YL2_HIST_XLIM = (1.0, 6.2)
 
 # Contour plotting controls
 CONTOUR_BINS = 160
@@ -66,6 +67,31 @@ LABEL_BOX_KWARGS = {
     'linewidth': 0.8,
     'alpha': 0.9
 }
+
+
+# -----------------------------
+# Utility helpers
+# -----------------------------
+def make_display_name(file_name):
+    base = os.path.splitext(os.path.basename(file_name))[0]
+    base = re.sub(r'\s+', ' ', base).strip()
+
+    # Example target:
+    # 231110 - 48h-60h_Experiment_Group_A1 -> 231110 - 48h-60h_A1
+    m = re.match(r'^(\d{6})\s*-\s*([^_]+)_(?:.*)_([A-Za-z]\d+)$', base)
+    if m:
+        date_part, timepoint_part, well_part = m.groups()
+        return f'{date_part} - {timepoint_part}_{well_part}'
+
+    # More permissive fallback: keep date, first section after dash, final well ID
+    m = re.match(r'^(\d{6})\s*-\s*(.+?)_([A-Za-z]\d+)$', base)
+    if m:
+        date_part, middle_part, well_part = m.groups()
+        middle_part = re.sub(r'_Experiment_Group', '', middle_part)
+        middle_part = re.sub(r'_+', '_', middle_part).strip('_')
+        return f'{date_part} - {middle_part}_{well_part}'
+
+    return base
 
 
 # -----------------------------
@@ -258,13 +284,13 @@ def plot_flow_contours(x, y, xlabel, ylabel, title, file_name, output_suffix,
 
 
 
-def plot_fsc_ssc_with_gate(df, file_name, cell_fraction):
+def plot_fsc_ssc_with_gate(df, file_name, display_name, cell_fraction):
     plot_flow_contours(
         x=df['FSC-H (log)'].values,
         y=df['SSC-H (log)'].values,
         xlabel='FSC-H (log scale)',
         ylabel='SSC-H (log scale)',
-        title=f'FSC-H vs SSC-H All Events ({file_name})',
+        title=f'FSC-H vs SSC-H All Events ({display_name})',
         file_name=file_name,
         output_suffix='fsc_ssc',
         ellipse_params=CELL_ELLIPSE_PARAMS,
@@ -293,13 +319,13 @@ def apply_cell_gate(df):
 
 
 
-def plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction):
+def plot_fsca_vs_fsch_with_gate(cell_df, file_name, display_name, singlet_fraction):
     plot_flow_contours(
         x=cell_df['FSC-A (log)'].values,
         y=cell_df['FSC-H (log)'].values,
         xlabel='FSC-A (log scale)',
         ylabel='FSC-H (log scale)',
-        title=f'FSC-H vs FSC-A Gated on Cells ({file_name})',
+        title=f'FSC-H vs FSC-A Gated on Cells ({display_name})',
         file_name=file_name,
         output_suffix='fsca_vs_fsch',
         ellipse_params=SINGLETS_ELLIPSE_PARAMS,
@@ -378,7 +404,7 @@ def compute_global_histogram_limits(file_list):
 
 
 def plot_histograms(df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold, file_name,
-                    percentage_bl1, percentage_yl2, bl1_hist_ylim, yl2_hist_ylim):
+                    display_name, percentage_bl1, percentage_yl2, bl1_hist_ylim, yl2_hist_ylim):
     fig, axes = plt.subplots(1, 2, figsize=(14, 7))
 
     ax1 = axes[0]
@@ -388,16 +414,15 @@ def plot_histograms(df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold
         bl1_threshold,
         color='r',
         linestyle='--',
-        linewidth=1.5,
-        label=f'Threshold: {10 ** bl1_threshold:.0f}'
+        linewidth=1.5
     )
     ax1.set_xlabel('BL1-H (log scale)')
     ax1.set_ylabel('Frequency')
-    ax1.set_title(f'Histogram of BL1-H (log) Gated on Singlets ({file_name})')
+    ax1.set_title(f'Histogram of BL1-H (log) Gated on Singlets ({display_name})')
     ax1.set_xlim(BL1_HIST_XLIM)
     ax1.set_ylim(0, bl1_hist_ylim)
     add_boxed_label(ax1, f'In gate: {percentage_bl1:.1f}%', x=0.02, y=0.98)
-    add_boxed_label(ax1, f'Threshold: {10 ** bl1_threshold:.0f}', x=0.02, y=0.93)
+    add_boxed_label(ax1, f'Threshold: {10 ** bl1_threshold:.0f}', x=0.02, y=0.94)
 
     ax2 = axes[1]
     ax2.hist(df['YL2-H (log)'].dropna(), bins=HIST_BINS, range=YL2_HIST_XLIM,
@@ -406,16 +431,15 @@ def plot_histograms(df, gated_bl1_df, gated_yl2_df, bl1_threshold, yl2_threshold
         yl2_threshold,
         color='r',
         linestyle='--',
-        linewidth=1.5,
-        label=f'Threshold: {10 ** yl2_threshold:.0f}'
+        linewidth=1.5
     )
     ax2.set_xlabel('YL2-H (log scale)')
     ax2.set_ylabel('Frequency')
-    ax2.set_title(f'Histogram of YL2-H (log) Gated on Singlets ({file_name})')
+    ax2.set_title(f'Histogram of YL2-H (log) Gated on Singlets ({display_name})')
     ax2.set_xlim(YL2_HIST_XLIM)
     ax2.set_ylim(0, yl2_hist_ylim)
     add_boxed_label(ax2, f'In gate: {percentage_yl2:.1f}%', x=0.02, y=0.98)
-    add_boxed_label(ax2, f'Threshold: {10 ** yl2_threshold:.0f}', x=0.02, y=0.93)
+    add_boxed_label(ax2, f'Threshold: {10 ** yl2_threshold:.0f}', x=0.02, y=0.94)
 
     fig.tight_layout()
     fig.savefig(f'{file_name}_histograms.png', dpi=SAVE_DPI)
@@ -445,6 +469,7 @@ BL1_HIST_YMAX, YL2_HIST_YMAX = compute_global_histogram_limits(file_list)
 
 for file_path in file_list:
     file_name = os.path.splitext(os.path.basename(file_path))[0]
+    display_name = make_display_name(file_name)
     print(f"Processing file: {file_name}")
 
     raw_df = load_fcs_data(file_path)
@@ -471,13 +496,13 @@ for file_path in file_list:
     cell_fraction = calculate_percentage(cell_df, df)
 
     if PLOTTING_FIGS:
-        plot_fsc_ssc_with_gate(df, file_name, cell_fraction)
+        plot_fsc_ssc_with_gate(df, file_name, display_name, cell_fraction)
 
     singlet_df = apply_singlet_gate(cell_df)
     singlet_fraction = calculate_percentage(singlet_df, cell_df)
 
     if PLOTTING_FIGS:
-        plot_fsca_vs_fsch_with_gate(cell_df, file_name, singlet_fraction)
+        plot_fsca_vs_fsch_with_gate(cell_df, file_name, display_name, singlet_fraction)
 
     gated_bl1_df = singlet_df[singlet_df['BL1-H (log)'] > bl1_threshold]
     gated_yl2_df = singlet_df[singlet_df['YL2-H (log)'] > yl2_threshold]
@@ -493,6 +518,7 @@ for file_path in file_list:
             bl1_threshold,
             yl2_threshold,
             file_name,
+            display_name,
             percentage_bl1,
             percentage_yl2,
             BL1_HIST_YMAX,
