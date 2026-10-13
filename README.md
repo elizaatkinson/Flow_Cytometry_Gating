@@ -313,3 +313,6 @@ To avoid confusion, consider renaming the exported summary files after each run,
 - `gating_results_attune.xlsx`
 
 This makes it easier to track which gating workflow was used for each dataset.
+
+## AI disclosure
+This project was developed following the AI guidance of Imperial College London. AI tools were used in a limited, human-directed capacity to help identify and fix bugs during development.
