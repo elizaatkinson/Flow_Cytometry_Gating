@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "ATKINSON"
+  given-names: "ELIZA"
+  orcid: "https://orcid.org/0000-0002-7169-2791"
+title: "Flow_Cytometry_Gating"
+version: 1.0.0
+date-released: 2026-10-13
+license: MIT 
+url: "https://github.com/elizaatkinson/Flow_Cytometry_Gating"
+notes: "Manuscript in preparation"
